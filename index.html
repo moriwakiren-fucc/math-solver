@@ -979,19 +979,24 @@ function displayResult(markdown) {
 }
 
 function renderMarkdown(text) {
-  // Protect math blocks before HTML processing
+  // Protect ALL math delimiters before HTML processing
   const mathBlocks = [];
-  let t = text
-    .replace(/\$\$([\s\S]+?)\$\$/g, (_, m) => {
-      mathBlocks.push({ type: 'display', content: m });
-      return '%%MB' + (mathBlocks.length - 1) + '%%';
-    })
-    .replace(/\$([^\n$]+?)\$/g, (_, m) => {
-      mathBlocks.push({ type: 'inline', content: m });
-      return '%%MB' + (mathBlocks.length - 1) + '%%';
-    });
+  const protect = (raw, latex, isDisplay) => {
+    mathBlocks.push({ raw, latex, isDisplay });
+    return '%%MB' + (mathBlocks.length - 1) + '%%';
+  };
 
-  // Apply markdown
+  let t = text
+    // \\[...\\] display
+    .replace(/\\\[([\s\S]+?)\\\]/g, (full, m) => protect(full, m, true))
+    // \\(...\\) inline
+    .replace(/\\\(([\s\S]+?)\\\)/g, (full, m) => protect(full, m, false))
+    // $$...$$ display
+    .replace(/\$\$([\s\S]+?)\$\$/g, (full, m) => protect(full, m, true))
+    // $...$ inline (no newlines)
+    .replace(/\$([^\n$]+?)\$/g, (full, m) => protect(full, m, false));
+
+  // Apply markdown transforms
   t = t
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
@@ -1001,10 +1006,10 @@ function renderMarkdown(text) {
     .replace(/^/, '<p>')
     .replace(/$/, '</p>');
 
-  // Restore math
+  // Restore math blocks — use original raw delimiters so KaTeX auto-render recognises them
   t = t.replace(/%%MB(\d+)%%/g, (_, i) => {
     const b = mathBlocks[parseInt(i)];
-    return b.type === 'display' ? '$$' + b.content + '$$' : '$' + b.content + '$';
+    return b.raw;
   });
 
   return t;
