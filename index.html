@@ -593,8 +593,10 @@
     <div class="result-header">
       <h2>解答・解説</h2>
       <span class="result-badge" id="result-badge">完了</span>
+      <button id="raw-toggle-btn" onclick="toggleRaw()" style="margin-left:auto;font-size:11px;padding:3px 10px;background:none;border:1px solid var(--border);border-radius:10px;cursor:pointer;color:var(--text-muted);">生テキスト表示</button>
     </div>
     <div class="result-body" id="result-body"></div>
+    <pre id="result-raw" style="display:none;padding:16px;font-size:12px;font-family:var(--font-mono);white-space:pre-wrap;word-break:break-all;background:var(--accent-soft);border-top:1px solid var(--border);color:var(--text-muted);max-height:300px;overflow-y:auto;"></pre>
   </div>
 
   <!-- HISTORY -->
@@ -615,6 +617,15 @@ let currentTab = 'text';
 let formulaLatex = '';
 let uploadedImageBase64 = null;
 let isLoading = false;
+let lastRawAnswer = '';
+
+function toggleRaw() {
+  const raw = document.getElementById('result-raw');
+  const btn = document.getElementById('raw-toggle-btn');
+  const shown = raw.style.display !== 'none';
+  raw.style.display = shown ? 'none' : 'block';
+  btn.textContent = shown ? '生テキスト表示' : '生テキスト非表示';
+}
 
 // ─── KEYBOARD DEFINITIONS ────────────────────────────
 const KB_BUTTONS = {
@@ -917,6 +928,8 @@ async function solve() {
     const data = await res.json();
     const answer = data.choices?.[0]?.message?.content || 'エラーが発生しました';
 
+    lastRawAnswer = answer;
+    document.getElementById('result-raw').textContent = answer;
     displayResult(answer);
     badge.textContent = '完了';
     badge.style.background = 'var(--highlight)';
@@ -967,36 +980,40 @@ function displayResult(markdown) {
   if (typeof renderMathInElement === 'function') {
     renderMathInElement(body, {
       delimiters: [
-        { left: '$$', right: '$$', display: true },
-        { left: '$',  right: '$',  display: false },
-        { left: '\\[', right: '\\]', display: true },
+        { left: '$$',  right: '$$',  display: true  },
+        { left: '$',   right: '$',   display: false },
+        { left: '\\[', right: '\\]', display: true  },
         { left: '\\(', right: '\\)', display: false }
       ],
       throwOnError: false,
-      strict: false
+      strict: false,
+      trust: true,
+      macros: { '\\R': '\\mathbb{R}' }
     });
   }
 }
 
 function renderMarkdown(text) {
-  // Protect ALL math delimiters before HTML processing
+  // Protect ALL math blocks before any HTML processing
   const mathBlocks = [];
-  const protect = (raw, latex, isDisplay) => {
-    mathBlocks.push({ raw, latex, isDisplay });
-    return '%%MB' + (mathBlocks.length - 1) + '%%';
+  const protect = (raw) => {
+    mathBlocks.push(raw);
+    return '\x00MB' + (mathBlocks.length - 1) + '\x00';
   };
 
   let t = text
-    // \\[...\\] display
-    .replace(/\\\[([\s\S]+?)\\\]/g, (full, m) => protect(full, m, true))
-    // \\(...\\) inline
-    .replace(/\\\(([\s\S]+?)\\\)/g, (full, m) => protect(full, m, false))
+    // \begin{...}...\end{...} environments (display)
+    .replace(/\\begin\{[^}]+\}[\s\S]+?\\end\{[^}]+\}/g, protect)
+    // \[...\] display
+    .replace(/\\\[[\s\S]+?\\\]/g, protect)
+    // \(...\) inline
+    .replace(/\\\([\s\S]+?\\\)/g, protect)
     // $$...$$ display
-    .replace(/\$\$([\s\S]+?)\$\$/g, (full, m) => protect(full, m, true))
-    // $...$ inline (no newlines)
-    .replace(/\$([^\n$]+?)\$/g, (full, m) => protect(full, m, false));
+    .replace(/\$\$[\s\S]+?\$\$/g, protect)
+    // $...$ inline (single line only)
+    .replace(/\$[^\n$]+?\$/g, protect);
 
-  // Apply markdown transforms
+  // Apply markdown transforms (safe — no math inside now)
   t = t
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
@@ -1006,11 +1023,8 @@ function renderMarkdown(text) {
     .replace(/^/, '<p>')
     .replace(/$/, '</p>');
 
-  // Restore math blocks — use original raw delimiters so KaTeX auto-render recognises them
-  t = t.replace(/%%MB(\d+)%%/g, (_, i) => {
-    const b = mathBlocks[parseInt(i)];
-    return b.raw;
-  });
+  // Restore original math strings verbatim
+  t = t.replace(/\x00MB(\d+)\x00/g, (_, i) => mathBlocks[parseInt(i)]);
 
   return t;
 }
